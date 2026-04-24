@@ -5,9 +5,7 @@ import folium
 from folium import plugins
 from streamlit_folium import folium_static
 import branca.colormap as cm
-import gpxpy
 import os
-import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import io
@@ -42,14 +40,9 @@ SHP_ZIP_ID = '1wFrYGQ6gUjhlDAuwfnGe1jIZ5cqU01aE'
 
 @st.cache_resource(show_spinner=False)
 def get_drive_service():
-    # 🌟 ดึงข้อมูลกุญแจในรูปแบบ Dictionary จาก Secrets ตรงๆ
-    # วิธีนี้เสถียรที่สุดสำหรับ Streamlit Cloud
     info = dict(st.secrets["gcp_service_account"])
-    
-    # ซ่อมแซมรหัสขึ้นบรรทัดใหม่ป้องกันความผิดพลาดจากการก๊อปปี้
     if "private_key" in info:
         info["private_key"] = info["private_key"].replace("\\n", "\n")
-        
     creds = service_account.Credentials.from_service_account_info(info)
     return build('drive', 'v3', credentials=creds)
 
@@ -59,12 +52,13 @@ def download_file(file_id):
     return io.BytesIO(request.execute())
 
 # --- 3. DATA LOADING ---
-@st.cache_data(ttl=3600, show_spinner="กำลังโหลดข้อมูลงานวิจัย...")
+@st.cache_data(ttl=3600)
 def load_all_data():
     def clean_name(text):
         if pd.isna(text): return ""
         return str(text).strip().replace("จ.", "").replace("อ.", "").strip()
 
+    # Load CSV
     df = pd.read_csv(download_file(CSV_ID), encoding='cp874')
     df['บ้านเสียหายรวม'] = pd.to_numeric(df['บ้านเสียหาย \n(หลังคาเรือน)'], errors='coerce').fillna(0)
     df.loc[df['บ้านเสียหายรวม'] >= 9999, 'บ้านเสียหายรวม'] = 0
@@ -77,23 +71,27 @@ def load_all_data():
     df['ชื่อเดือน'] = df['เดือน'].map(month_map)
     df['จำนวนครั้งรวม'] = 1
 
+    # Load SHP
     zip_data = download_file(SHP_ZIP_ID)
+    if not os.path.exists("temp_shp_amp"): os.makedirs("temp_shp_amp")
     with zipfile.ZipFile(zip_data) as z:
         z.extractall("temp_shp_amp")
     shp_file = [f for f in os.listdir("temp_shp_amp") if f.endswith('.shp')][0]
     gdf = gpd.read_file(os.path.join("temp_shp_amp", shp_file))
     
-    pv_col = 'PV_TN' if 'PV_TN' in gdf.columns else ('PROV_NAMT' if 'PROV_NAMT' in gdf.columns else 'pro_tn')
-    ap_col = 'AP_TN' if 'AP_TN' in gdf.columns else ('AMP_NAMT' if 'AMP_NAMT' in gdf.columns else 'am_tn')
+    # 🌟 ตรวจสอบชื่อคอลัมน์ให้ยืดหยุ่นที่สุด
+    cols = gdf.columns.tolist()
+    pv_col = next((c for c in ['PV_TN', 'PROV_NAMT', 'pro_tn', 'PROV_TN'] if c in cols), cols[0])
+    ap_col = next((c for c in ['AP_TN', 'AMP_NAMT', 'am_tn', 'AMP_TN'] if c in cols), cols[1])
     
     gdf['prov_clean'] = gdf[pv_col].apply(clean_name)
     gdf['amp_clean'] = gdf[ap_col].apply(clean_name)
     gdf.loc[gdf['amp_clean'] == 'เมือง', 'amp_clean'] = 'เมือง' + gdf['prov_clean']
-    gdf = gdf.to_crs(epsg=4326)
     
+    gdf = gdf.to_crs(epsg=4326)
     gdf['lat'] = gdf.geometry.centroid.y
     gdf['lon'] = gdf.geometry.centroid.x
-    gdf['geometry'] = gdf['geometry'].simplify(0.005, preserve_topology=True)
+    gdf['geometry'] = gdf['geometry'].simplify(0.005)
     
     return df, gdf, month_map
 
@@ -103,8 +101,8 @@ except Exception as e:
     st.error(f"❌ โหลดข้อมูลล้มเหลว: {e}")
     st.stop()
 
-# --- 4. SIDEBAR & CHARTS ---
-st.sidebar.title("🔍 การคัดกรอง & วิเคราะห์")
+# --- 4. SIDEBAR & PROCESSING ---
+st.sidebar.title("🔍 คัดกรองข้อมูล")
 sel_prov = st.sidebar.selectbox("📍 เลือกจังหวัด", ["ทั้งหมด"] + sorted(df_raw['prov_clean'].unique().tolist()))
 amp_list = ["ทั้งหมด"]
 if sel_prov != "ทั้งหมด":
@@ -112,98 +110,58 @@ if sel_prov != "ทั้งหมด":
 sel_amp = st.sidebar.selectbox("🏘️ เลือกอำเภอ", amp_list)
 sel_month = st.sidebar.selectbox("📅 เลือกเดือน", ["ทั้งหมด"] + [month_map[m] for m in sorted(df_raw['เดือน'].unique())])
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🏆 5 จังหวัดที่เสียหายสูงสุด")
-top_prov = df_raw.groupby('prov_clean')['บ้านเสียหายรวม'].sum().nlargest(5)
-st.sidebar.bar_chart(top_prov)
-
-if st.sidebar.button("🚪 Log Out"):
-    del st.session_state.password_correct
-    st.rerun()
-
-# --- 5. PROCESSING ---
 dff = df_raw.copy()
 if sel_prov != "ทั้งหมด": dff = dff[dff['prov_clean'] == sel_prov]
 if sel_amp != "ทั้งหมด": dff = dff[dff['amp_clean'] == sel_amp]
 if sel_month != "ทั้งหมด": dff = dff[dff['ชื่อเดือน'] == sel_month]
 
+# รวมข้อมูลเข้ากับแผนที่
 df_sum = dff.groupby(['prov_clean', 'amp_clean']).agg({'จำนวนครั้งรวม':'sum', 'บ้านเสียหายรวม':'sum'}).reset_index()
 gdf_final = gdf_base.merge(df_sum, on=['prov_clean', 'amp_clean'], how='left').fillna(0)
 
-# --- 6. UI LAYOUT ---
-st.title("🛡️ Disaster Strategic Intelligence Dashboard")
-
-m1, m2, m3, m4 = st.columns(4)
+# --- 5. UI ---
+st.title("🛡️ Disaster Intelligence Dashboard")
+m1, m2, m3 = st.columns(3)
 m1.metric("🌪️ เหตุการณ์", f"{int(dff['จำนวนครั้งรวม'].sum()):,} ครั้ง")
 m2.metric("🏠 บ้านเสียหายรวม", f"{int(dff['บ้านเสียหายรวม'].sum()):,} หลัง")
-m3.metric("📅 เดือน", sel_month)
-m4.metric("📈 Max Damage", f"{int(df_sum['บ้านเสียหายรวม'].max() if not df_sum.empty else 0):,} หลัง")
+m3.metric("📍 พื้นที่ที่เลือก", sel_amp if sel_amp != "ทั้งหมด" else sel_prov)
 
 st.markdown("---")
 col_map, col_viz = st.columns([2, 1])
 
 with col_map:
-    st.subheader("🌐 แผนที่ความเสียหายรายพื้นที่")
-    center, zoom = [15.5, 102.8], 7
-    if sel_amp != "ทั้งหมด":
-        t = gdf_final[gdf_final['amp_clean'] == sel_amp]
-        center, zoom = [t['lat'].mean(), t['lon'].mean()], 11
-    elif sel_prov != "ทั้งหมด":
-        t = gdf_final[gdf_final['prov_clean'] == sel_prov]
-        center, zoom = [t['lat'].mean(), t['lon'].mean()], 8
-
-    m = folium.Map(location=center, zoom_start=zoom, tiles=None)
-    folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', attr='Google Satellite', name='ดาวเทียม').add_to(m)
-    folium.TileLayer('cartodbpositron', name='แผนที่ขาว').add_to(m)
+    st.subheader("🌐 แผนที่วิเคราะห์ความเสียหาย")
+    center = [gdf_final['lat'].mean(), gdf_final['lon'].mean()]
+    m = folium.Map(location=center, zoom_start=7, tiles='cartodbpositron')
+    folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', attr='Google', name='ดาวเทียม').add_to(m)
     
-    layer_choropleth = folium.FeatureGroup(name='📊 ความเสียหายรายอำเภอ', show=True)
+    # 📊 Layer: Choropleth
     mx = float(gdf_final['บ้านเสียหายรวม'].max() or 1)
-    color_scale = ['#fff5f0', '#fcbba1', '#fb6a4a', '#de2d26', '#a50f15']
-    cp = cm.LinearColormap(colors=color_scale, vmin=0, vmax=mx)
+    cp = cm.LinearColormap(colors=['#fff5f0', '#fb6a4a', '#a50f15'], vmin=0, vmax=mx)
     
-    folium.GeoJson(gdf_final.__geo_interface__, style_function=lambda f: {
-        'fillColor': cp(f['properties'].get('บ้านเสียหายรวม', 0)),
-        'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
-    }, tooltip=folium.GeoJsonTooltip(fields=['amp_clean', 'บ้านเสียหายรวม'], aliases=['อำเภอ:', 'เสียหาย:'])).add_to(layer_choropleth)
-    layer_choropleth.add_to(m)
+    folium.GeoJson(
+        gdf_final.__geo_interface__,
+        style_function=lambda f: {
+            'fillColor': cp(f['properties'].get('บ้านเสียหายรวม', 0)),
+            'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
+        },
+        tooltip=folium.GeoJsonTooltip(fields=['amp_clean', 'บ้านเสียหายรวม'], aliases=['อำเภอ:', 'เสียหาย:'])
+    ).add_to(m)
 
-    layer_nav = folium.FeatureGroup(name="🚀 จุดนำทาง Google Maps", show=True)
-    show_pts = gdf_final[gdf_final['บ้านเสียหายรวม'] > 0]
-    for _, row in show_pts.iterrows():
-        g_url = f"https://www.google.com/maps?q={row['lat']},{row['lon']}"
-        pop = f"<div style='min-width:150px;'><b>อ.{row['amp_clean']}</b><br>🏠 เสียหาย: {int(row['บ้านเสียหายรวม'])} หลัง<hr><a href='{g_url}' target='_blank' style='display:block; text-align:center; background:#4285F4; color:white; padding:5px; border-radius:5px; text-decoration:none;'>🚀 ไป Google Maps</a></div>"
-        folium.CircleMarker([row['lat'], row['lon']], radius=6, color='white', weight=1, fill=True, fill_color='#1A73E8', fill_opacity=0.8, popup=folium.Popup(pop, max_width=250)).add_to(layer_nav)
-    layer_nav.add_to(m)
+    # 🚀 Layer: Markers
+    for _, row in gdf_final[gdf_final['บ้านเสียหายรวม'] > 0].iterrows():
+        g_url = f"https://www.google.com/maps/search/?api=1&query={row['lat']},{row['lon']}"
+        pop = f"<b>อ.{row['amp_clean']}</b><br>เสียหาย: {int(row['บ้านเสียหายรวม'])} หลัง<br><a href='{g_url}' target='_blank'>🚀 เปิดแผนที่</a>"
+        folium.CircleMarker([row['lat'], row['lon']], radius=5, color='blue', fill=True, popup=folium.Popup(pop, max_width=200)).add_to(m)
 
-    folium.LayerControl(collapsed=False).add_to(m)
-    
-    legend_html = '''
-    {% macro html(this, kwargs) %}
-    <div style="position: absolute; bottom: 50px; right: 50px; width: 120px; height: 160px; 
-        background-color: white; border:2px solid grey; z-index:9999; font-size:12px; padding: 10px; border-radius: 5px; opacity: 0.9;">
-        <b>เสียหาย (หลัง)</b><br>
-        <div style="height: 100px; width: 20px; background: linear-gradient(to top, #fff5f0, #fcbba1, #fb6a4a, #de2d26, #a50f15); float: left; margin-right: 10px; border: 1px solid #ccc;"></div>
-        <div style="height: 100px; display: flex; flex-direction: column; justify-content: space-between;">
-            <span>''' + str(int(mx)) + '''</span>
-            <span>0</span>
-        </div>
-    </div>
-    {% endmacro %}
-    '''
-    macro = MacroElement()
-    macro._template = Template(legend_html)
-    m.get_root().add_child(macro)
-
-    folium_static(m, width=850, height=520)
+    folium.LayerControl().add_to(m)
+    folium_static(m, width=800, height=500)
 
 with col_viz:
-    st.subheader("📊 สถิติรายวัน")
-    daily = dff.groupby('วัน')['จำนวนครั้งรวม'].sum().reset_index()
-    st.plotly_chart(px.bar(daily, x='วัน', y='จำนวนครั้งรวม', color_discrete_sequence=['#4285F4']).update_layout(height=250), use_container_width=True)
-    
-    st.subheader("📈 แนวโน้มรายเดือน")
-    trend = dff.groupby('เดือน')['บ้านเสียหายรวม'].sum().reset_index()
-    st.plotly_chart(px.line(trend, x='เดือน', y='บ้านเสียหายรวม', markers=True).update_layout(height=200), use_container_width=True)
+    st.subheader("📊 อันดับความเสียหาย")
+    top_5 = df_sum.nlargest(5, 'บ้านเสียหายรวม')
+    st.plotly_chart(px.bar(top_5, x='amp_clean', y='บ้านเสียหายรวม', color='บ้านเสียหายรวม'), use_container_width=True)
+    st.subheader("📈 แนวโน้มเดือน")
+    st.plotly_chart(px.line(dff.groupby('เดือน')['บ้านเสียหายรวม'].sum().reset_index(), x='เดือน', y='บ้านเสียหายรวม'), use_container_width=True)
 
-st.subheader("📝 ตารางข้อมูลละเอียด")
-st.dataframe(dff[['วัน', 'ชื่อเดือน', 'จังหวัด_ย่อ', 'อำเภอ_ย่อ', 'บ้านเสียหายรวม']].sort_values('บ้านเสียหายรวม', ascending=False), use_container_width=True)
+st.dataframe(dff[['วัน','ชื่อเดือน','จังหวัด_ย่อ','อำเภอ_ย่อ','บ้านเสียหายรวม']].sort_values('บ้านเสียหายรวม', ascending=False), use_container_width=True)
