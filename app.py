@@ -22,9 +22,8 @@ st.set_page_config(page_title="Strategic Disaster Intelligence", layout="wide")
 def check_password():
     if "password_correct" not in st.session_state:
         st.title("🔐 Disaster Intelligence Login")
-        st.info("ระบบจัดการข้อมูลงานวิจัยพายุ (เข้าถึงเฉพาะบุคคล)")
-        password = st.text_input("กรุณากรอกรหัสผ่าน", type="password")
-        if st.button("เข้าสู่ระบบ"):
+        password = st.text_input("Password", type="password")
+        if st.button("Log In"):
             if password == "041244":
                 st.session_state.password_correct = True
                 st.rerun()
@@ -39,13 +38,12 @@ if not check_password():
 # --- 2. DRIVE API SETTINGS ---
 CSV_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
 SHP_ZIP_ID = '1wFrYGQ6gUjhlDAuwfnGe1jIZ5cqU01aE' 
-JSON_FILE_PATH = '/content/drive/MyDrive/data Point Pee james/ฐานข้อมูลภาคอีสานย้อนหลัง11 ปี/ee-kulwiliyc-7ea7048472e7.json'
-GPX_PATH = '/content/drive/MyDrive/data Point Pee james/ฐานข้อมูลภาคอีสานย้อนหลัง11 ปี/mapstogpx20260422_194132.gpx'
+# ⚠️ สังเกตว่าเราลบตัวแปร JSON_FILE_PATH ที่ดึงจาก Drive ออกไปแล้วครับ
 
 @st.cache_resource(show_spinner=False)
 def get_drive_service():
-    with open(JSON_FILE_PATH) as f:
-        info = json.load(f)
+    # อัปเดต: ดึงกุญแจจากตู้เซฟ Secrets ของ Streamlit Cloud แทน
+    info = json.loads(st.secrets["GOOGLE_JSON"])
     creds = service_account.Credentials.from_service_account_info(info)
     return build('drive', 'v3', credentials=creds)
 
@@ -55,7 +53,7 @@ def download_file(file_id):
     return io.BytesIO(request.execute())
 
 # --- 3. DATA LOADING ---
-@st.cache_data(ttl=3600, show_spinner="กำลังดึงข้อมูลจาก Google Drive...")
+@st.cache_data(ttl=3600, show_spinner="กำลังโหลดข้อมูลงานวิจัย...")
 def load_all_data():
     def clean_name(text):
         if pd.isna(text): return ""
@@ -91,18 +89,10 @@ def load_all_data():
     gdf['lon'] = gdf.geometry.centroid.x
     gdf['geometry'] = gdf['geometry'].simplify(0.005, preserve_topology=True)
     
-    gpx_pts = []
-    if os.path.exists(GPX_PATH):
-        with open(GPX_PATH, 'r', encoding='utf-8') as f:
-            gpx = gpxpy.parse(f)
-            for track in gpx.tracks:
-                for seg in track.segments:
-                    for p in seg.points: gpx_pts.append((p.latitude, p.longitude))
-
-    return df, gdf, gpx_pts, month_map
+    return df, gdf, month_map
 
 try:
-    df_raw, gdf_base, gpx_points, month_map = load_all_data()
+    df_raw, gdf_base, month_map = load_all_data()
 except Exception as e:
     st.error(f"❌ โหลดข้อมูลล้มเหลว: {e}")
     st.stop()
@@ -166,7 +156,6 @@ with col_map:
     folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', attr='Google Satellite', name='ดาวเทียม').add_to(m)
     folium.TileLayer('cartodbpositron', name='แผนที่ขาว').add_to(m)
     
-    # 1. ความเสียหายรายอำเภอ
     layer_choropleth = folium.FeatureGroup(name='📊 ความเสียหายรายอำเภอ', show=True)
     mx = float(gdf_final['บ้านเสียหายรวม'].max() or 1)
     color_scale = ['#fff5f0', '#fcbba1', '#fb6a4a', '#de2d26', '#a50f15']
@@ -178,7 +167,6 @@ with col_map:
     }, tooltip=folium.GeoJsonTooltip(fields=['amp_clean', 'บ้านเสียหายรวม'], aliases=['อำเภอ:', 'เสียหาย:'])).add_to(layer_choropleth)
     layer_choropleth.add_to(m)
 
-    # 2. จุดนำทาง Google Maps
     layer_nav = folium.FeatureGroup(name="🚀 จุดนำทาง Google Maps", show=True)
     show_pts = gdf_final[gdf_final['บ้านเสียหายรวม'] > 0] if sel_prov == "ทั้งหมด" else gdf_final[gdf_final['prov_clean'] == sel_prov]
     for _, row in show_pts.iterrows():
@@ -187,26 +175,16 @@ with col_map:
         folium.CircleMarker([row['lat'], row['lon']], radius=7, color='white', weight=2, fill=True, fill_color='#1A73E8', fill_opacity=1, popup=folium.Popup(pop, max_width=250)).add_to(layer_nav)
     layer_nav.add_to(m)
 
-    # 3. มหาวิทยาลัยนเรศวร (ม.น.)
     layer_nu = folium.FeatureGroup(name="📍 มหาวิทยาลัยนเรศวร (ม.น.)", show=True)
     folium.Marker([16.7467, 100.1965], popup="<b>มหาวิทยาลัยนเรศวร (ม.น.)</b>", icon=folium.Icon(color="purple", icon="info-sign")).add_to(layer_nu)
     layer_nu.add_to(m)
     
-    # 4. สถานีเรดาร์ตรวจอากาศ อุบลราชธานี
     layer_radar = folium.FeatureGroup(name="📡 สถานีเรดาร์ อุบลราชธานี", show=True)
     folium.Marker([15.2452, 104.8709], popup="<b>สถานีเรดาร์ตรวจอากาศ อุบลราชธานี</b>", icon=folium.Icon(color="orange", icon="info-sign")).add_to(layer_radar)
     layer_radar.add_to(m)
 
-    # 5. เส้นทางสำรวจ
-    layer_route = folium.FeatureGroup(name="🛣️ เส้นทางสำรวจ", show=True)
-    if gpx_points:
-        folium.PolyLine(gpx_points, color='#3498db', weight=6, opacity=0.8).add_to(layer_route)
-        plugins.AntPath(gpx_points, color='#ffffff', weight=2).add_to(layer_route)
-    layer_route.add_to(m)
-
     folium.LayerControl(collapsed=False).add_to(m)
     
-    # Custom Vertical Legend
     legend_html = '''
     {% macro html(this, kwargs) %}
     <div style="position: absolute; bottom: 50px; right: 50px; width: 120px; height: 180px; 
