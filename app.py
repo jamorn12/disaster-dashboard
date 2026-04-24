@@ -37,9 +37,9 @@ if not check_password():
     st.stop()
 
 # --- 2. DRIVE API SETTINGS ---
-CSV_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
+CSV_ID = '1ac8biU8i89KS0XEfjjg0Axa2vqPi8QXT' 
 SHP_ZIP_ID = '1wFrYGQ6gUjhlDAuwfnGe1jIZ5cqU01aE' 
-GPX_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
+GPX_ID = '1ac8biU8i89KS0XEfjjg0Axa2vqPi8QXT' 
 
 @st.cache_resource(show_spinner=False)
 def get_drive_service():
