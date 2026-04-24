@@ -39,12 +39,11 @@ if not check_password():
 # --- 2. DRIVE API SETTINGS ---
 CSV_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
 SHP_ZIP_ID = '1wFrYGQ6gUjhlDAuwfnGe1jIZ5cqU01aE' 
-# เส้นทางไฟล์ GPX ใน Google Drive (อันเดิม)
-GPX_PATH = '/content/drive/MyDrive/data Point Pee james/ฐานข้อมูลภาคอีสานย้อนหลัง11 ปี/mapstogpx20260422_194132.gpx'
+# ดึงผ่าน ID เพื่อความเสถียรบน Cloud
+GPX_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
 
 @st.cache_resource(show_spinner=False)
 def get_drive_service():
-    # 🌟 ดึงข้อมูลกุญแจจาก Secrets รูปแบบ [gcp_service_account]
     info = dict(st.secrets["gcp_service_account"])
     if "private_key" in info:
         info["private_key"] = info["private_key"].replace("\\n", "\n")
@@ -93,14 +92,15 @@ def load_all_data():
     gdf['lon'] = gdf.geometry.centroid.x
     gdf['geometry'] = gdf['geometry'].simplify(0.005, preserve_topology=True)
     
-    # 🌟 ดึงข้อมูลเส้นทางสำรวจ (GPX) กลับมา
     gpx_pts = []
-    if os.path.exists(GPX_PATH):
-        with open(GPX_PATH, 'r', encoding='utf-8') as f:
-            gpx = gpxpy.parse(f)
-            for track in gpx.tracks:
-                for seg in track.segments:
-                    for p in seg.points: gpx_pts.append((p.latitude, p.longitude))
+    try:
+        gpx_content = download_file(GPX_ID).getvalue().decode("utf-8")
+        gpx = gpxpy.parse(gpx_content)
+        for track in gpx.tracks:
+            for seg in track.segments:
+                for p in seg.points: gpx_pts.append((p.latitude, p.longitude))
+    except:
+        pass
 
     return df, gdf, gpx_pts, month_map
 
@@ -169,19 +169,18 @@ with col_map:
     folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', attr='Google Satellite', name='ดาวเทียม').add_to(m)
     folium.TileLayer('cartodbpositron', name='แผนที่ขาว').add_to(m)
     
-    # 🌟 นำเลเยอร์ความเสียหายรายอำเภอ (Choropleth) กลับมา
+    # 📊 เลเยอร์ความเสียหายรายอำเภอ (Choropleth)
     layer_choropleth = folium.FeatureGroup(name='📊 ความเสียหายรายอำเภอ', show=True)
     mx = float(gdf_final['บ้านเสียหายรวม'].max() or 1)
     color_scale = ['#fff5f0', '#fcbba1', '#fb6a4a', '#de2d26', '#a50f15']
     cp = cm.LinearColormap(colors=color_scale, vmin=0, vmax=mx)
-    
     folium.GeoJson(gdf_final.__geo_interface__, style_function=lambda f: {
         'fillColor': cp(f['properties'].get('บ้านเสียหายรวม', 0)),
         'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
     }, tooltip=folium.GeoJsonTooltip(fields=['amp_clean', 'บ้านเสียหายรวม'], aliases=['อำเภอ:', 'เสียหาย:'])).add_to(layer_choropleth)
     layer_choropleth.add_to(m)
 
-    # 🌟 นำเลเยอร์จุดนำทาง Google Maps กลับมา
+    # 🚀 เลเยอร์จุดนำทาง Google Maps
     layer_nav = folium.FeatureGroup(name="🚀 จุดนำทาง Google Maps", show=True)
     show_pts = gdf_final[gdf_final['บ้านเสียหายรวม'] > 0] if sel_prov == "ทั้งหมด" else gdf_final[gdf_final['prov_clean'] == sel_prov]
     for _, row in show_pts.iterrows():
@@ -190,7 +189,30 @@ with col_map:
         folium.CircleMarker([row['lat'], row['lon']], radius=7, color='white', weight=2, fill=True, fill_color='#1A73E8', fill_opacity=1, popup=folium.Popup(pop, max_width=250)).add_to(layer_nav)
     layer_nav.add_to(m)
 
-    # 🌟 นำเลเยอร์สถานที่สำคัญและเส้นทางกลับมา
+    # 📍 🌟 เพิ่มเลเยอร์ Waypoints & เส้นทางเชื่อมโยง (Google Maps Route)
+    layer_waypoints = folium.FeatureGroup(name="📍 จุด Waypoints & เส้นเชื่อม", show=True)
+    waypoints_data = [
+        ('ม.นเรศวร (เริ่มต้น)', (100.1965, 16.7467)),
+        ('วังน้ำเขียว', (101.9348, 14.4009)),
+        ('ตัวเมืองนครราชสีมา', (102.2548, 14.8882)),
+        ('พิมาย นครราชสีมา', (102.5643, 15.1820)),
+        ('สถานีอุตุฯ สุรินทร์', (103.4960, 14.8757)),
+        ('สถานีเรดาร์ อุบลราชธานี (ปลายทาง)', (104.8709, 15.2452)),
+    ]
+    
+    # วาดเส้นสีแดงเชื่อมจุด Waypoints ทั้ง 6
+    route_coords = [[c[1], c[0]] for n, c in waypoints_data]
+    folium.PolyLine(route_coords, color='#e74c3c', weight=4, opacity=0.8, dash_array='10').add_to(layer_waypoints)
+    
+    for name, coords in waypoints_data:
+        folium.Marker(
+            location=[coords[1], coords[0]], 
+            popup=f"<b>{name}</b>",
+            icon=folium.Icon(color='red', icon='info-sign')
+        ).add_to(layer_waypoints)
+    layer_waypoints.add_to(m)
+
+    # 📍 เลเยอร์สถานที่สำคัญเดิม
     layer_nu = folium.FeatureGroup(name="📍 มหาวิทยาลัยนเรศวร (ม.น.)", show=True)
     folium.Marker([16.7467, 100.1965], popup="<b>มหาวิทยาลัยนเรศวร (ม.น.)</b>", icon=folium.Icon(color="purple", icon="info-sign")).add_to(layer_nu)
     layer_nu.add_to(m)
@@ -199,16 +221,16 @@ with col_map:
     folium.Marker([15.2452, 104.8709], popup="<b>สถานีเรดาร์ตรวจอากาศ อุบลราชธานี</b>", icon=folium.Icon(color="orange", icon="info-sign")).add_to(layer_radar)
     layer_radar.add_to(m)
 
+    # 🛣️ เลเยอร์เส้นทางสำรวจ (GPX เส้นสีฟ้า)
     layer_route = folium.FeatureGroup(name="🛣️ เส้นทางสำรวจ", show=True)
     if gpx_points:
         folium.PolyLine(gpx_points, color='#3498db', weight=6, opacity=0.8).add_to(layer_route)
         plugins.AntPath(gpx_points, color='#ffffff', weight=2).add_to(layer_route)
     layer_route.add_to(m)
 
-    # นำ LayerControl กลับมาให้เปิด-ปิดได้เหมือนเดิม
     folium.LayerControl(collapsed=False).add_to(m)
     
-    # นำ Legend (คำอธิบายสี) กลับมา
+    # Legend
     legend_html = '''
     {% macro html(this, kwargs) %}
     <div style="position: absolute; bottom: 50px; right: 50px; width: 120px; height: 180px; 
