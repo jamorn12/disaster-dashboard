@@ -1,0 +1,10 @@
+streamlit
+pandas
+geopandas
+folium
+streamlit-folium
+branca
+gpxpy
+google-api-python-client
+google-auth
+plotly
