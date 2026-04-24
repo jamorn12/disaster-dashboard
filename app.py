@@ -39,7 +39,6 @@ if not check_password():
 # --- 2. DRIVE API SETTINGS ---
 CSV_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
 SHP_ZIP_ID = '1wFrYGQ6gUjhlDAuwfnGe1jIZ5cqU01aE' 
-# ดึงผ่าน ID เพื่อความเสถียรบน Cloud
 GPX_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
 
 @st.cache_resource(show_spinner=False)
@@ -156,7 +155,7 @@ st.markdown("---")
 col_map, col_viz = st.columns([2, 1])
 
 with col_map:
-    st.subheader("🌐 แผนที่แสดงจุดเกิดเหตุและจุดนำทาง")
+    st.subheader("🌐 แผนที่ยุทธศาสตร์และเส้นทางสำรวจ")
     center, zoom = [15.5, 102.8], 7
     if sel_amp != "ทั้งหมด":
         t = gdf_final[gdf_final['amp_clean'] == sel_amp]
@@ -180,17 +179,17 @@ with col_map:
     }, tooltip=folium.GeoJsonTooltip(fields=['amp_clean', 'บ้านเสียหายรวม'], aliases=['อำเภอ:', 'เสียหาย:'])).add_to(layer_choropleth)
     layer_choropleth.add_to(m)
 
-    # 🚀 เลเยอร์จุดนำทาง Google Maps
+    # 🚀 เลเยอร์จุดนำทาง Google Maps (จุดที่เสียหาย)
     layer_nav = folium.FeatureGroup(name="🚀 จุดนำทาง Google Maps", show=True)
     show_pts = gdf_final[gdf_final['บ้านเสียหายรวม'] > 0] if sel_prov == "ทั้งหมด" else gdf_final[gdf_final['prov_clean'] == sel_prov]
     for _, row in show_pts.iterrows():
-        g_url = f"https://www.google.com/maps/search/?api=1&query={row['lat']},{row['lon']}"
-        pop = f"<div style='font-family:Sarabun; min-width:150px;'><b>อ.{row['amp_clean']}</b><br>🏠 เสียหาย: {int(row['บ้านเสียหายรวม'])} หลัง<hr><a href='{g_url}' target='_blank' style='display:block; text-align:center; background:#4285F4; color:white; padding:8px; border-radius:5px; text-decoration:none; font-weight:bold;'>🚀 ไป Google Maps</a></div>"
+        g_url = f"https://www.google.com/maps/dir/?api=1&destination={row['lat']},{row['lon']}"
+        pop = f"<div style='font-family:Sarabun; min-width:150px;'><b>อ.{row['amp_clean']}</b><br>🏠 เสียหาย: {int(row['บ้านเสียหายรวม'])} หลัง<hr><a href='{g_url}' target='_blank' style='display:block; text-align:center; background:#4285F4; color:white; padding:8px; border-radius:5px; text-decoration:none; font-weight:bold;'>🚀 นำทางไปจุดนี้</a></div>"
         folium.CircleMarker([row['lat'], row['lon']], radius=7, color='white', weight=2, fill=True, fill_color='#1A73E8', fill_opacity=1, popup=folium.Popup(pop, max_width=250)).add_to(layer_nav)
     layer_nav.add_to(m)
 
-    # 📍 🌟 เพิ่มเลเยอร์ Waypoints & เส้นทางเชื่อมโยง (Google Maps Route)
-    layer_waypoints = folium.FeatureGroup(name="📍 จุด Waypoints & เส้นเชื่อม", show=True)
+    # 📍 🌟 เพิ่มเลเยอร์ Waypoints (6 จุดสำคัญ) พร้อมปุ่ม Google Maps Route
+    layer_waypoints = folium.FeatureGroup(name="📍 สถานที่สำคัญ (Waypoints)", show=True)
     waypoints_data = [
         ('ม.นเรศวร (เริ่มต้น)', (100.1965, 16.7467)),
         ('วังน้ำเขียว', (101.9348, 14.4009)),
@@ -200,19 +199,19 @@ with col_map:
         ('สถานีเรดาร์ อุบลราชธานี (ปลายทาง)', (104.8709, 15.2452)),
     ]
     
-    # วาดเส้นสีแดงเชื่อมจุด Waypoints ทั้ง 6
-    route_coords = [[c[1], c[0]] for n, c in waypoints_data]
-    folium.PolyLine(route_coords, color='#e74c3c', weight=4, opacity=0.8, dash_array='10').add_to(layer_waypoints)
-    
     for name, coords in waypoints_data:
+        # สร้างลิงก์ Google Maps สำหรับจุด Waypoints
+        g_url_wp = f"https://www.google.com/maps/dir/?api=1&destination={coords[1]},{coords[0]}"
+        pop_wp = f"<div style='font-family:Sarabun; min-width:180px;'><b>{name}</b><hr><a href='{g_url_wp}' target='_blank' style='display:block; text-align:center; background:#EA4335; color:white; padding:8px; border-radius:5px; text-decoration:none; font-weight:bold;'>🚀 นำทางด้วย Google Maps</a></div>"
+        
         folium.Marker(
             location=[coords[1], coords[0]], 
-            popup=f"<b>{name}</b>",
+            popup=folium.Popup(pop_wp, max_width=250),
             icon=folium.Icon(color='red', icon='info-sign')
         ).add_to(layer_waypoints)
     layer_waypoints.add_to(m)
 
-    # 📍 เลเยอร์สถานที่สำคัญเดิม
+    # 📍 เลเยอร์เดิม (ม.น. และ เรดาร์)
     layer_nu = folium.FeatureGroup(name="📍 มหาวิทยาลัยนเรศวร (ม.น.)", show=True)
     folium.Marker([16.7467, 100.1965], popup="<b>มหาวิทยาลัยนเรศวร (ม.น.)</b>", icon=folium.Icon(color="purple", icon="info-sign")).add_to(layer_nu)
     layer_nu.add_to(m)
@@ -230,7 +229,7 @@ with col_map:
 
     folium.LayerControl(collapsed=False).add_to(m)
     
-    # Legend
+    # Legend (คำอธิบายสี)
     legend_html = '''
     {% macro html(this, kwargs) %}
     <div style="position: absolute; bottom: 50px; right: 50px; width: 120px; height: 180px; 
