@@ -22,8 +22,9 @@ st.set_page_config(page_title="Strategic Disaster Intelligence", layout="wide")
 def check_password():
     if "password_correct" not in st.session_state:
         st.title("🔐 Disaster Intelligence Login")
-        password = st.text_input("Password", type="password")
-        if st.button("Log In"):
+        st.info("ระบบจัดการข้อมูลงานวิจัยพายุ (เข้าถึงเฉพาะบุคคล)")
+        password = st.text_input("กรุณากรอกรหัสผ่าน", type="password")
+        if st.button("เข้าสู่ระบบ"):
             if password == "041244":
                 st.session_state.password_correct = True
                 st.rerun()
@@ -38,12 +39,14 @@ if not check_password():
 # --- 2. DRIVE API SETTINGS ---
 CSV_ID = '179Xvq-DATFAdoCSYDjpLQoFyPyPB58BV' 
 SHP_ZIP_ID = '1wFrYGQ6gUjhlDAuwfnGe1jIZ5cqU01aE' 
-# ⚠️ สังเกตว่าเราลบตัวแปร JSON_FILE_PATH ที่ดึงจาก Drive ออกไปแล้วครับ
 
 @st.cache_resource(show_spinner=False)
 def get_drive_service():
-    # อัปเดต: ดึงกุญแจจากตู้เซฟ Secrets ของ Streamlit Cloud แทน
-    info = json.loads(st.secrets["GOOGLE_JSON"])
+    # ดึงกุญแจจากตู้เซฟ Secrets
+    info = json.loads(st.secrets["GOOGLE_JSON"], strict=False)
+    # 🛠️ บรรทัดที่เพิ่มเข้ามา: สั่งซ่อมแซมรหัสขึ้นบรรทัดใหม่ให้ถูกต้อง 100%
+    info["private_key"] = info["private_key"].replace('\\n', '\n')
+    
     creds = service_account.Credentials.from_service_account_info(info)
     return build('drive', 'v3', credentials=creds)
 
