@@ -204,6 +204,13 @@ with col_map:
     route_coords = [[c[1], c[0]] for n, c in waypoints_data]
     folium.PolyLine(route_coords, color='#e74c3c', weight=4, opacity=0.8, dash_array='10').add_to(layer_waypoints)
     
+    for name, coords in waypoints_data:
+        folium.Marker(
+            location=[coords[1], coords[0]], 
+            popup=f"<b>{name}</b>",
+            icon=folium.Icon(color='red', icon='info-sign')
+        ).add_to(layer_waypoints)
+    layer_waypoints.add_to(m)
 
     # 📍 เลเยอร์สถานที่สำคัญเดิม
     layer_nu = folium.FeatureGroup(name="📍 มหาวิทยาลัยนเรศวร (ม.น.)", show=True)
